@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Checkout - Azure Queue Storage</title>
+  <style>
+    :root {
+      --primary:#2563eb; --primary-dark:#1d4ed8; --success:#15803d;
+      --danger:#dc2626; --text:#1f2937; --muted:#6b7280;
+      --border:#e5e7eb; --bg:#f3f6fb; --card:#fff;
+    }
+    * { box-sizing:border-box; }
+    body {
+      margin:0; padding:35px 20px; font-family:Arial,sans-serif;
+      color:var(--text); background:linear-gradient(180deg,#eef4ff 0%,var(--bg) 100%);
+    }
+    .container { width:min(760px,100%); margin:auto; }
+    .card {
+      background:var(--card); border:1px solid var(--border); border-radius:18px;
+      padding:28px; box-shadow:0 12px 30px rgba(15,23,42,.08);
+    }
+    h1 { margin-top:0; color:var(--primary-dark); text-align:center; }
+    .subtitulo { text-align:center; color:var(--muted); margin-bottom:28px; }
+    .secao { margin-top:22px; }
+    .secao h2 { font-size:1.1rem; margin-bottom:14px; }
+    .grid { display:grid; grid-template-columns:repeat(2,1fr); gap:14px; }
+    .campo { display:flex; flex-direction:column; gap:7px; }
+    .campo label { font-weight:600; font-size:.92rem; }
+    .campo input,.campo select {
+      width:100%; padding:12px; border:1px solid var(--border);
+      border-radius:10px; font-size:1rem;
+    }
+    .resumo {
+      margin-top:24px; padding:18px; background:#eff6ff;
+      border-radius:12px; border:1px solid #dbeafe;
+    }
+    .resumo-linha { display:flex; justify-content:space-between; gap:15px; margin:8px 0; }
+    .total { font-size:1.25rem; font-weight:700; color:var(--primary-dark);
+      border-top:1px solid #bfdbfe; padding-top:12px; margin-top:12px; }
+    button {
+      width:100%; margin-top:22px; padding:14px; border:0; border-radius:10px;
+      background:var(--primary); color:#fff; font-size:1rem; font-weight:700; cursor:pointer;
+    }
+    button:hover { background:var(--primary-dark); }
+    button:disabled { opacity:.6; cursor:not-allowed; }
+    #mensagem { margin-top:18px; min-height:24px; text-align:center; font-weight:700; }
+    .sucesso { color:var(--success); } .erro { color:var(--danger); }
+    .fluxo,.fila {
+      margin-top:18px; padding:14px; border-radius:10px;
+      background:#f8fafc; border:1px solid var(--border);
+    }
+    .fluxo { line-height:1.6; font-size:.92rem; }
+    .fila {
+      font-family:Consolas,monospace; white-space:pre-wrap; word-break:break-word;
+      max-height:260px; overflow:auto;
+    }
+    @media (max-width:600px) { .grid { grid-template-columns:1fr; } .card { padding:20px; } }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <section class="card">
+      <h1>Finalizar compra</h1>
+      <p class="subtitulo">Simulação de confirmação de venda com Azure Queue Storage</p>
+
+      <form id="formVenda">
+        <div class="secao">
+          <h2>Dados do cliente</h2>
+          <div class="grid">
+            <div class="campo">
+              <label for="cliente">Nome</label>
+              <input id="cliente" type="text" placeholder="Rhuan Santana" required>
+            </div>
+            <div class="campo">
+              <label for="email">E-mail</label>
+              <input id="email" type="email" placeholder="cliente@email.com" required>
+            </div>
+          </div>
+        </div>
+
+        <div class="secao">
+          <h2>Produto</h2>
+          <div class="grid">
+            <div class="campo">
+              <label for="produto">Produto</label>
+              <input id="produto" type="text" placeholder="Teclado Mecânico" required>
+            </div>
+            <div class="campo">
+              <label for="formaPagamento">Forma de pagamento</label>
+              <select id="formaPagamento" required>
+                <option value="">Selecione</option>
+                <option>PIX</option>
+                <option>Cartão de crédito</option>
+                <option>Boleto</option>
+              </select>
+            </div>
+            <div class="campo">
+              <label for="quantidade">Quantidade</label>
+              <input id="quantidade" type="number" min="1" value="1" required>
+            </div>
+            <div class="campo">
+              <label for="valorUnitario">Valor unitário (R$)</label>
+              <input id="valorUnitario" type="number" min="0.01" step="0.01" placeholder="199.90" required>
+            </div>
+          </div>
+        </div>
+
+        <div class="resumo">
+          <div class="resumo-linha"><span>Produto:</span><strong id="resumoProduto">-</strong></div>
+          <div class="resumo-linha"><span>Quantidade:</span><strong id="resumoQuantidade">1</strong></div>
+          <div class="resumo-linha total"><span>Total:</span><strong id="resumoTotal">R$ 0,00</strong></div>
+        </div>
+
+        <button id="botaoConfirmar" type="submit">Confirmar venda</button>
+      </form>
+
+      <div id="mensagem"></div>
+
+      <div class="fluxo">
+        <strong>Fluxo:</strong><br>
+        Cliente confirma a venda → Node.js cria a mensagem JSON →
+        Azure Queue Storage → mensagem aguarda processamento →
+        futuramente um worker pode gerar a nota fiscal.
+      </div>
+
+      <div class="secao">
+        <h2>Fila atual</h2>
+        <button type="button" id="btnFila" style="margin-top:0;">
+          Visualizar mensagens da fila
+        </button>
+        <div id="fila" class="fila">Nenhuma consulta realizada.</div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const form = document.getElementById("formVenda");
+    const mensagem = document.getElementById("mensagem");
+    const botao = document.getElementById("botaoConfirmar");
+    const produto = document.getElementById("produto");
+    const quantidade = document.getElementById("quantidade");
+    const valor = document.getElementById("valorUnitario");
+    const resumoProduto = document.getElementById("resumoProduto");
+    const resumoQuantidade = document.getElementById("resumoQuantidade");
+    const resumoTotal = document.getElementById("resumoTotal");
+    const btnFila = document.getElementById("btnFila");
+    const fila = document.getElementById("fila");
+
+    function atualizarResumo() {
+      const qtd = Number(quantidade.value) || 0;
+      const preco = Number(valor.value) || 0;
+      resumoProduto.textContent = produto.value || "-";
+      resumoQuantidade.textContent = qtd;
+      resumoTotal.textContent = (qtd * preco).toLocaleString("pt-BR", {
+        style:"currency", currency:"BRL"
+      });
+    }
+
+    [produto, quantidade, valor].forEach((el) =>
+      el.addEventListener("input", atualizarResumo)
+    );
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      botao.disabled = true;
+      mensagem.className = "";
+      mensagem.textContent = "Enviando venda para a fila...";
+
+      const dados = {
+        cliente: document.getElementById("cliente").value,
+        email: document.getElementById("email").value,
+        produto: produto.value,
+        quantidade: quantidade.value,
+        valorUnitario: valor.value,
+        formaPagamento: document.getElementById("formaPagamento").value
+      };
+
+      try {
+        const resposta = await fetch("/api/vendas", {
+          method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(dados)
+        });
+        const resultado = await resposta.json();
+        if (!resposta.ok) throw new Error(resultado.erro || "Erro ao confirmar venda.");
+
+        mensagem.className = "sucesso";
+        mensagem.textContent =
+          `Venda ${resultado.venda.id} confirmada e enviada para a fila.`;
+        form.reset();
+        quantidade.value = 1;
+        atualizarResumo();
+      } catch (erro) {
+        mensagem.className = "erro";
+        mensagem.textContent = erro.message;
+      } finally {
+        botao.disabled = false;
+      }
+    });
+
+    btnFila.addEventListener("click", async () => {
+      fila.textContent = "Consultando fila...";
+      try {
+        const resposta = await fetch("/api/fila");
+        const resultado = await resposta.json();
+        if (!resposta.ok) throw new Error(resultado.erro || "Erro ao consultar a fila.");
+
+        if (resultado.quantidade === 0) {
+          fila.textContent = "A fila está vazia.";
+          return;
+        }
+
+        fila.textContent = resultado.mensagens.map((m, i) =>
+          `Mensagem ${i + 1}\nID: ${m.id}\nInserida em: ${m.inseridaEm}\nConteúdo:\n${m.conteudo}\n--------------------------------`
+        ).join("\n\n");
+      } catch (erro) {
+        fila.textContent = erro.message;
+      }
+    });
+
+    atualizarResumo();
+  </script>
+</body>
+</html>
